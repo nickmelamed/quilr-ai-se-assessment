@@ -8,11 +8,10 @@ import logging
 import sys
 import uuid
 
-from pydantic import ValidationError
-
 from mcp.server.mcpserver import MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
+from pydantic import ValidationError
 
 from mock_data import generate_customer_record
 from schemas import GetCustomerRecordParams, TriggerRefundParams
@@ -53,7 +52,9 @@ def get_customer_record(customer_id: str) -> dict:
 def trigger_refund(customer_id: str, amount: float, reason: str) -> dict:
     """Issue a refund for a customer. amount must be positive; reason needs 10+ chars."""
     try:
-        params = TriggerRefundParams(customer_id=customer_id, amount=amount, reason=reason)
+        params = TriggerRefundParams(
+            customer_id=customer_id, amount=amount, reason=reason
+        )
     except ValidationError as exc:
         logger.info("rejected trigger_refund: %s", exc)
         raise MCPError(INVALID_PARAMS, _invalid_params_message(exc)) from exc
