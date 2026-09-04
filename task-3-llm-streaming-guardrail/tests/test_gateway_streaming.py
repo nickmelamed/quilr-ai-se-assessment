@@ -23,7 +23,7 @@ def test_generate_redacts_pii_in_streamed_response():
 def test_generate_returns_the_full_plain_text_response():
     # Starlette's in-process TestClient drains an async generator eagerly
     # (there's no real network delay to force separate reads), so it can't
-    # assert chunk-by-chunk streaming behavior (covered directly against redact_stream() in tests/test_redactor.py) 
+    # assert chunk-by-chunk streaming behavior (covered directly against redact_stream() in tests/test_redactor.py)
     # This just confirms the endpoint returns the right content end-to-end.
     prompt = (
         "no secrets in this one, just a long plain sentence with lots of extra words"
