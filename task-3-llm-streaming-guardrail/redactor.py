@@ -4,14 +4,19 @@ Detects emails, SSNs, and credit card numbers in an LLM's streamed text
 output and replaces them with `[REDACTED]`, including patterns split across
 a chunk boundary, without ever buffering the full response.
 
-Each incoming chunk is appended to a small trailing "tail" buffer
-left over from the previous chunk, the combined text is redacted in one
-regex pass, and everything except the last `HOLDBACK_CHARS` characters is
-emitted immediately. The held-back tail is short enough that it can only
-ever contain an in-progress (not yet complete) match, so a pattern that
-straddles a chunk boundary always ends up whole in some future scan of
-tail + next chunk, and only its (now redacted) window can be re-scanned;
-the buffer is a small constant, never the accumulated response.
+Each incoming chunk is appended to a small trailing "tail" buffer left over
+from the previous chunk. A match is only substituted once it is *confirmed*
+final: it must end before the last `HOLDBACK_CHARS` characters of the
+buffer, and at least one more character must already exist in the buffer
+after it. A match ending exactly at the edge of the currently buffered text
+is not trusted, because a greedy quantifier only stops there for lack of
+more input, not because the pattern is actually finished (a domain of
+"example.co" is a syntactically complete email host right up until the "m"
+of "example.com" arrives in the next chunk). Anything not yet confirmed is
+kept as raw, unsubstituted text in the tail so it can be re-scanned, with
+more context, on the next chunk. The tail stays a small constant, never the
+accumulated response, so redaction never re-processes text it has already
+emitted.
 """
 
 import re
@@ -24,7 +29,7 @@ CC_RE = r"(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,7}(?!\d)"
 PII_RE = re.compile(f"(?P<email>{EMAIL_RE})|(?P<ssn>{SSN_RE})|(?P<cc>{CC_RE})")
 
 # Longest pattern above (email) matches at most ~95 chars; 100 gives headroom
-# so a partial match is never longer than the held-back tail.
+# so an in-progress match is never longer than the held-back tail.
 HOLDBACK_CHARS = 100
 
 
@@ -58,13 +63,18 @@ class StreamingPIIRedactor:
 
     def feed(self, chunk: str) -> str:
         """Feed the next chunk in and return the portion now safe to emit."""
-        redacted = PII_RE.sub(_replace, self._tail + chunk)
-        if len(redacted) <= self._holdback_chars:
-            self._tail = redacted
-            return ""
-        split_at = len(redacted) - self._holdback_chars
-        emit, self._tail = redacted[:split_at], redacted[split_at:]
-        return emit
+        working = self._tail + chunk
+        safe_len = max(0, len(working) - self._holdback_chars)
+        for match in PII_RE.finditer(working):
+            if match.end() == len(working):
+                # Touches the edge of buffered text: might still extend.
+                safe_len = min(safe_len, match.start())
+            elif match.start() < safe_len < match.end():
+                # Confirmed match, but the generic margin would split it.
+                safe_len = match.start()
+
+        safe_prefix, self._tail = working[:safe_len], working[safe_len:]
+        return PII_RE.sub(_replace, safe_prefix) if safe_prefix else ""
 
     def flush(self) -> str:
         """Redact and return whatever remains once the source stream has ended."""
